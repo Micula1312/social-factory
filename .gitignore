@@ -1,0 +1,5 @@
+node_modules/
+dist/
+exports/
+.playwright/
+.DS_Store
