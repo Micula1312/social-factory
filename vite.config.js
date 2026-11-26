@@ -1,9 +1,13 @@
 import {defineConfig} from 'vite';
-import {readFile} from 'node:fs/promises';
+import {spawn} from 'node:child_process';
+import {tmpdir} from 'node:os';
+import {mkdtemp,writeFile,rm,readFile} from 'node:fs/promises';
 import {resolve,sep} from 'node:path';
 import {captureWebsite, listCaptures, recordMobile} from './scripts/capture-core.mjs';
 
 export default defineConfig({server:{host:'127.0.0.1'},plugins:[{name:'social-factory-local-harvest',configureServer(server){server.middlewares.use(async(req,res,next)=>{const requestUrl=new URL(req.url,'http://localhost');if(req.method==='GET'&&requestUrl.pathname.startsWith('/captures/')){try{const parts=requestUrl.pathname.split('/').filter(Boolean);if(parts.length!==3||(!['desktop.png','portrait.png','mobile.png','mobile.mp4','logo.png'].includes(parts[2])&&!/^asset-\d+\.png$/.test(parts[2]))||!/^[a-z0-9-]+$/.test(parts[1]))throw Error('Invalid capture path');const data=await readFile(resolve('exports',parts[1],'captures',parts[2]));res.setHeader('Content-Type',parts[2].endsWith('.mp4')?'video/mp4':'image/png');res.end(data)}catch{res.statusCode=404;res.end('Capture not found')}return}if(!requestUrl.pathname.startsWith('/api/'))return next();req.url=requestUrl.pathname.slice(4)+requestUrl.search;
+ if(req.method==='POST'&&req.url==='/encode-slide'){let dir;try{const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>200*1024*1024)throw Error('Video too large');chunks.push(chunk)}dir=await mkdtemp(resolve(tmpdir(),'factory-'));const input=resolve(dir,'slide.webm'),output=resolve(dir,'slide.mp4');await writeFile(input,Buffer.concat(chunks));await new Promise((ok,no)=>{const p=spawn('ffmpeg',['-hide_banner','-loglevel','error','-y','-i',input,'-vf','fps=30,scale=1080:1350','-c:v','libx264','-preset','slow','-crf','17','-pix_fmt','yuv420p','-movflags','+faststart','-an',output]);let err='';p.stderr.on('data',d=>err+=d);p.on('error',no);p.on('close',code=>code===0?ok():no(Error(err||'FFmpeg failed')))});res.setHeader('Content-Type','video/mp4');res.end(await readFile(output))}catch(e){res.statusCode=500;res.end(e.message)}finally{if(dir)await rm(dir,{recursive:true,force:true})}return}
+
  if(req.method==='GET'&&req.url?.startsWith('/captures?')){try{const u=new URL(req.url,'http://localhost');const name=u.searchParams.get('project')||'';const result=await listCaptures(name);res.setHeader('Content-Type','application/json');res.end(JSON.stringify(result))}catch(e){res.statusCode=400;res.end(JSON.stringify({error:e.message}))}return}
  if(req.method!=='POST'||!['/harvest','/record'].includes(req.url)){res.statusCode=404;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({error:'Unknown API route'}));return}
  let data='';for await(const chunk of req){data+=chunk;if(data.length>10000){res.statusCode=413;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({error:'Request too large'}));return}}
